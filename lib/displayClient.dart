@@ -32,83 +32,68 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class User {
+class PushedData {
   final String email;
-  final String fname;
-  final String lname;
-  final String position;
-  final String? dateTime;
-  final String? location;
-  final String? device;
+  final String dateTime;
+  final String location;
+  final String device;
 
-  User({
-    required this.fname,
-    required this.lname,
+  PushedData({
     required this.email,
-    required this.position,
-    this.dateTime,
-    this.location,
-    this.device,
+    required this.dateTime,
+    required this.location,
+    required this.device,
   });
 
-  factory User.fromJson(Map<dynamic, dynamic> json) {
-    return User(
+  factory PushedData.fromJson(Map<dynamic, dynamic> json) {
+    return PushedData(
       email: json['email']?.toString() ?? '',
-      fname: json['fname']?.toString() ?? '',
-      lname: json['lname']?.toString() ?? '',
-      position: json['position']?.toString() ?? '',
-    );
-  }
-
-  User copyWithPush(Map<dynamic, dynamic> pushJson) {
-    return User(
-      email: email,
-      fname: fname,
-      lname: lname,
-      position: position,
-      dateTime: pushJson['date']?.toString(),
-      location: pushJson['location']?.toString(),
-      device: pushJson['deviceId']?.toString(),
+      dateTime: json['date']?.toString() ?? '',
+      location: json['location']?.toString() ?? '',
+      device: json['deviceId']?.toString() ?? '',
     );
   }
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  List<User> userList = [];
-  bool filtered = false;
+  List<PushedData> dataList = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    readClients();
+    readPushedData();
   }
 
-  /// Load only clients (exclude admins)
-  Future<List<User>> loadClients() async {
-    final snapshot = await FirebaseDatabase.instance.ref("users").get();
-    if (!snapshot.exists) return [];
-
-    final data = snapshot.value as Map<dynamic, dynamic>;
-
-    return data.values
-        .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-        .where((u) => u.position != "Admin")
-        .toList();
-  }
-
-  Future<void> readClients() async {
+  /// Load all data from pushed table
+  Future<void> readPushedData() async {
     setState(() => _isLoading = true);
 
     try {
-      userList = await loadClients();
-      filtered = false;
-      print("Loaded ${userList.length} clients from Firebase");
+      final pushedSnap = await FirebaseDatabase.instance.ref("pushed").get();
+      if (!pushedSnap.exists) {
+        dataList = [];
+        return;
+      }
+
+      final pushedData = pushedSnap.value as Map<dynamic, dynamic>;
+
+      dataList = pushedData.values
+          .map((e) => PushedData.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+
+      // Sort by date and time, newest first
+      dataList.sort((a, b) {
+        if (a.dateTime.isEmpty || b.dateTime.isEmpty) return 0;
+        final dateA = DateTime.tryParse(a.dateTime.replaceAll(" ", "T"));
+        final dateB = DateTime.tryParse(b.dateTime.replaceAll(" ", "T"));
+        if (dateA == null || dateB == null) return 0;
+        return dateB.compareTo(dateA); // descending order (newest first)
+      });
     } catch (e) {
-      print("Error reading users: $e");
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Failed to load clients"),
+          content: Text("Failed to load data"),
           backgroundColor: Colors.red,
         ),
       );
@@ -117,7 +102,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  /// Search clients by pushed date
+  /// Search data by date range
   Future<void> searchByDate(String startDate, String endDate) async {
     if (startDate.isEmpty || endDate.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -132,51 +117,45 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() => _isLoading = true);
 
     try {
-      final clients = await loadClients();
-
       final pushedSnap = await FirebaseDatabase.instance.ref("pushed").get();
       if (!pushedSnap.exists) {
-        userList = [];
+        dataList = [];
         return;
       }
 
       final pushedData = pushedSnap.value as Map<dynamic, dynamic>;
       final start = DateTime.parse(startDate);
-      final end = DateTime.parse(endDate);
+      final end = DateTime.parse(
+        endDate,
+      ).add(const Duration(hours: 23, minutes: 59, seconds: 59));
 
-      final filteredPushes = pushedData.values.where((e) {
-        final push = Map<String, dynamic>.from(e);
-        final dateStr = push['date']?.toString();
-        if (dateStr == null) return false;
+      dataList = pushedData.values
+          .map((e) => PushedData.fromJson(Map<String, dynamic>.from(e)))
+          .where((data) {
+            if (data.dateTime.isEmpty) return false;
 
-        // convert "yyyy-MM-dd HH:mm:ss" → proper DateTime
-        final date = DateTime.tryParse(dateStr.replaceAll(" ", "T"));
-        if (date == null) return false;
+            // convert "yyyy-MM-dd HH:mm:ss" → proper DateTime
+            final date = DateTime.tryParse(data.dateTime.replaceAll(" ", "T"));
+            if (date == null) return false;
 
-        return date.isAtSameMomentAs(start) ||
-            date.isAtSameMomentAs(end) ||
-            (date.isAfter(start) && date.isBefore(end));
+            // Check if date is within range (inclusive of both start and end dates)
+            return (date.isAtSameMomentAs(start) || date.isAfter(start)) &&
+                (date.isAtSameMomentAs(end) || date.isBefore(end));
+          })
+          .toList();
+
+      // Sort by date and time, newest first
+      dataList.sort((a, b) {
+        if (a.dateTime.isEmpty || b.dateTime.isEmpty) return 0;
+        final dateA = DateTime.tryParse(a.dateTime.replaceAll(" ", "T"));
+        final dateB = DateTime.tryParse(b.dateTime.replaceAll(" ", "T"));
+        if (dateA == null || dateB == null) return 0;
+        return dateB.compareTo(dateA); // descending order (newest first)
       });
-
-      userList = [];
-      for (var c in clients) {
-        for (var p in filteredPushes) {
-          final push = Map<String, dynamic>.from(p);
-          if (c.email == push['email']) {
-            userList.add(c.copyWithPush(push));
-          }
-        }
-      }
-
-      print(
-        "Filtered ${userList.length} clients between $startDate and $endDate",
-      );
-      filtered = true;
     } catch (e) {
-      print("Error filtering users: $e");
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Failed to filter users"),
+          content: Text("Failed to filter data"),
           backgroundColor: Colors.red,
         ),
       );
@@ -188,7 +167,6 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<bool> openInMaps(String coordinates) async {
     final coords = coordinates.split(',');
     if (coords.length != 2) {
-      debugPrint("Invalid coordinates format: $coordinates");
       return false;
     }
 
@@ -209,7 +187,6 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
 
-    debugPrint("Could not launch any map app for $coordinates");
     return false;
   }
 
@@ -218,134 +195,146 @@ class _MyHomePageState extends State<MyHomePage> {
     final _Controller1 = TextEditingController();
     final _Controller2 = TextEditingController();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("Display Clients")),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                TextFormField(
-                  controller: _Controller1,
-                  readOnly: true,
-                  decoration: const InputDecoration(
-                    labelText: "Select the first date",
-                    border: OutlineInputBorder(),
-                  ),
-                  onTap: () async {
-                    DateTime? pickedDate = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-
-                    if (pickedDate != null) {
-                      _Controller1.text =
-                          "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _Controller2,
-                  readOnly: true,
-                  decoration: const InputDecoration(
-                    labelText: "Select the second date",
-                    border: OutlineInputBorder(),
-                  ),
-                  onTap: () async {
-                    DateTime? pickedDate = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime(2000),
-                      lastDate: DateTime(2100),
-                    );
-
-                    if (pickedDate != null) {
-                      _Controller2.text =
-                          "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () =>
-                            searchByDate(_Controller1.text, _Controller2.text),
-                        child: const Text("Search by Date"),
-                      ),
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.pop(context);
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(title: Text('Display Clients')),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _Controller1,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: "Select the first date",
+                      border: OutlineInputBorder(),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () {
-                          _Controller1.clear();
-                          _Controller2.clear();
-                          readClients();
-                        },
-                        child: const Text("Show All Clients"),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : userList.isEmpty
-                ? const Center(
-                    child: Text(
-                      "No client users found",
-                      style: TextStyle(fontSize: 16),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: userList.length,
-                    itemBuilder: (context, index) {
-                      User user = userList[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        child: ListTile(
-                          title: Text(
-                            "${user.fname} ${user.lname}",
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(user.email),
-                              if (filtered) ...[
-                                const SizedBox(height: 8),
-                                Text("Time: ${user.dateTime ?? "N/A"}"),
-                                Text("Location: ${user.location ?? "N/A"}"),
-                                Text("Device Id: ${user.device ?? "N/A"}"),
-                              ],
-                            ],
-                          ),
-                          trailing:
-                              filtered &&
-                                  user.location != null &&
-                                  user.location!.contains(",")
-                              ? ElevatedButton(
-                                  onPressed: () => openInMaps(user.location!),
-                                  child: const Text("Open in Maps"),
-                                )
-                              : null,
-                        ),
+                    onTap: () async {
+                      DateTime? pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: DateTime.now(),
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2100),
                       );
+
+                      if (pickedDate != null) {
+                        _Controller1.text =
+                            "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                      }
                     },
                   ),
-          ),
-        ],
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _Controller2,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: "Select the second date",
+                      border: OutlineInputBorder(),
+                    ),
+                    onTap: () async {
+                      DateTime? pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: DateTime.now(),
+                        firstDate: DateTime(2000),
+                        lastDate: DateTime(2100),
+                      );
+
+                      if (pickedDate != null) {
+                        _Controller2.text =
+                            "${pickedDate.year}-${pickedDate.month.toString().padLeft(2, '0')}-${pickedDate.day.toString().padLeft(2, '0')}";
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => searchByDate(
+                            _Controller1.text,
+                            _Controller2.text,
+                          ),
+                          child: const Text("Search by Date"),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            _Controller1.clear();
+                            _Controller2.clear();
+                            readPushedData();
+                          },
+                          child: const Text("Show All Data"),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : dataList.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "No data found",
+                        style: TextStyle(fontSize: 16),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: dataList.length,
+                      itemBuilder: (context, index) {
+                        PushedData data = dataList[index];
+                        return Card(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: ListTile(
+                            title: Text(
+                              data.email,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 8),
+                                Text(
+                                  "Time: ${data.dateTime.isNotEmpty ? data.dateTime : "N/A"}",
+                                ),
+                                Text(
+                                  "Location: ${data.location.isNotEmpty ? data.location : "N/A"}",
+                                ),
+                                Text(
+                                  "Device Id: ${data.device.isNotEmpty ? data.device : "N/A"}",
+                                ),
+                              ],
+                            ),
+                            trailing:
+                                data.location.isNotEmpty &&
+                                    data.location.contains(",")
+                                ? ElevatedButton(
+                                    onPressed: () => openInMaps(data.location),
+                                    child: const Text("Open in Maps"),
+                                  )
+                                : null,
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

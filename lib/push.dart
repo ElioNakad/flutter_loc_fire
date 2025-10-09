@@ -172,7 +172,6 @@ class _UserFormState extends State<UserForm> {
       }
     } catch (e) {
       setState(() => _isLoading = false);
-      print("Error saving user: $e");
 
       if (!mounted) return;
       showDialog(
@@ -194,7 +193,15 @@ class _UserFormState extends State<UserForm> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('push page')),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.pop(context);
+          },
+        ),
+        title: Text('Push page'),
+      ),
       body: Center(
         child: Padding(
           padding: EdgeInsets.all(16.0),

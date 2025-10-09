@@ -1,243 +1,214 @@
+///main.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'login.dart' as login;
+import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:io';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  try {
-    await Firebase.initializeApp();
-    print("Firebase initialized successfully!");
-  } catch (e) {
-    print("Firebase initialization error: $e");
-  }
-
+  await Firebase.initializeApp();
   runApp(MyApp());
+}
+
+class Ids {
+  final String device;
+
+  Ids({required this.device});
+
+  factory Ids.fromJson(Map<dynamic, dynamic> json) {
+    return Ids(device: json['device'] ?? '');
+  }
 }
 
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(title: 'ADD NEW USERS', home: UserForm());
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'My App',
+      home: LoginScreen(), // Separate the login logic into its own widget
+    );
   }
 }
 
-class UserForm extends StatefulWidget {
+class LoginScreen extends StatefulWidget {
   @override
-  _UserFormState createState() => _UserFormState();
+  _LoginScreenState createState() => _LoginScreenState();
 }
 
-class _UserFormState extends State<UserForm> {
-  final _formKey = GlobalKey<FormState>();
-  final _fnameController = TextEditingController();
-  final _lnameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  String? _selectedUserType;
-  bool _isLoading = false;
+class _LoginScreenState extends State<LoginScreen> {
+  final _passController = TextEditingController();
+  final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
 
-  final DatabaseReference _database = FirebaseDatabase.instance.ref();
+  String correctCode = "";
+  bool isLoading = true;
+  bool isLoggedIn = false;
 
-  Future<void> _submitForm() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() {
-        _isLoading = true;
-      });
+  @override
+  void initState() {
+    super.initState();
+    checkDeviceLogin();
+    fillCorrectCode();
+  }
 
-      try {
-        // Generate a new unique key for each user
-        String userId = _database.child('users').push().key!;
+  Future<String> getDeviceId() async {
+    try {
+      if (Platform.isAndroid) {
+        AndroidDeviceInfo androidInfo = await _deviceInfo.androidInfo;
+        return androidInfo.id;
+      } else if (Platform.isIOS) {
+        IosDeviceInfo iosInfo = await _deviceInfo.iosInfo;
+        return iosInfo.identifierForVendor ?? 'unknown';
+      }
+    } catch (e) {
+      print('Error getting device ID: $e');
+    }
+    return 'unknown';
+  }
 
-        await _database.child('users').child(userId).set({
-          'fname': _fnameController.text.trim(),
-          'lname': _lnameController.text.trim(),
-          'email': _emailController.text.trim(),
-          'password': _passwordController.text
-              .trim(), // ⚠ stored in plain text!
-          'position': _selectedUserType,
-          'createdAt': ServerValue.timestamp,
-          'uid': userId,
-        });
+  Future<void> checkDeviceLogin() async {
+    try {
+      String id = await getDeviceId();
+      DatabaseReference ref = FirebaseDatabase.instance.ref("ids");
 
-        setState(() {
-          _isLoading = false;
+      final snapshot = await ref.get();
+
+      if (snapshot.exists) {
+        Map<dynamic, dynamic> pushed = snapshot.value as Map<dynamic, dynamic>;
+
+        bool deviceFound = false;
+        pushed.forEach((key, value) {
+          final user = Ids.fromJson(value);
+          if (user.device == id) {
+            deviceFound = true;
+          }
         });
 
         if (mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text('Success'),
-              content: Text('User saved to Realtime Database!'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _clearForm();
-                  },
-                  child: Text('OK'),
-                ),
-              ],
-            ),
-          );
+          setState(() {
+            isLoggedIn = deviceFound;
+            isLoading = false;
+          });
         }
-      } catch (e) {
-        setState(() {
-          _isLoading = false;
-        });
-        print("Error saving user: $e");
-
+      } else {
         if (mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: Text('Error'),
-              content: Text('Failed to save user. Please try again.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text('OK'),
-                ),
-              ],
-            ),
-          );
+          setState(() {
+            isLoading = false;
+          });
         }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
       }
     }
   }
 
-  void _clearForm() {
-    _fnameController.clear();
-    _lnameController.clear();
-    _emailController.clear();
-    _passwordController.clear();
-    setState(() {
-      _selectedUserType = null;
-    });
+  Future<void> fillCorrectCode() async {
+    try {
+      DatabaseReference ref = FirebaseDatabase.instance.ref("Passcode/code");
+      final snapshot = await ref.get();
+
+      if (snapshot.exists) {
+        setState(() {
+          correctCode = snapshot.value.toString();
+        });
+      }
+    } catch (e) {
+      print('Error fetching correct code: $e');
+    }
   }
 
-  bool isOnlyLettersNoSpaces(String input) {
-    final RegExp regex = RegExp(r'^[a-zA-Z]+$');
-    return regex.hasMatch(input);
+  void goToLogin() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => login.UserForm()),
+    );
   }
 
-  bool isValid(String input) {
-    final hasCapital = input.contains(RegExp(r'[A-Z]'));
-    final hasNumber = input.contains(RegExp(r'[0-9]'));
-    final noSpaces = !input.contains(' ');
-    final longEnough = input.length >= 6;
-    return hasCapital && hasNumber && noSpaces && longEnough;
-  }
+  Future<void> compareToCorrect(String s) async {
+    if (s == correctCode) {
+      // Save the device ID to Firebase
 
-  @override
-  void dispose() {
-    _fnameController.dispose();
-    _lnameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+      /*save id to firebase
+      try {
+        String id = await getDeviceId();
+        DatabaseReference ref = FirebaseDatabase.instance.ref("ids");
+
+        // Push a new entry with the device ID
+        await ref.push().set({'device': id});
+      } catch (e) {
+        print('Error saving device ID: $e');
+      }*/
+
+      goToLogin();
+    } else {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text('Error'),
+          content: Text('Incorrect code'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // If still loading, show loading indicator
+    if (isLoading) {
+      return Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // If device is already logged in, go directly to UserForm
+    if (isLoggedIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        goToLogin();
+      });
+      return Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    // Show login form
     return Scaffold(
-      appBar: AppBar(title: Text('ADD a new user')),
-      body: SingleChildScrollView(
+      appBar: AppBar(title: Text('')),
+      body: Padding(
         padding: EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              TextFormField(
-                controller: _fnameController,
-                decoration: InputDecoration(labelText: 'First Name'),
-                validator: (value) =>
-                    value == null ||
-                        value.isEmpty ||
-                        !isOnlyLettersNoSpaces(value)
-                    ? 'Enter first name (letters only, no spaces)'
-                    : null,
-              ),
-              SizedBox(height: 16),
-              TextFormField(
-                controller: _lnameController,
-                decoration: InputDecoration(labelText: 'Last Name'),
-                validator: (value) =>
-                    value == null ||
-                        value.isEmpty ||
-                        !isOnlyLettersNoSpaces(value)
-                    ? 'Enter last name (letters only, no spaces)'
-                    : null,
-              ),
-              SizedBox(height: 16),
-              TextFormField(
-                controller: _emailController,
-                decoration: InputDecoration(labelText: 'Email'),
-                keyboardType: TextInputType.emailAddress,
-                validator: (value) =>
-                    value == null || value.isEmpty || !value.contains('@')
-                    ? 'Enter valid email'
-                    : null,
-              ),
-              SizedBox(height: 16),
-              TextFormField(
-                controller: _passwordController,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  helperText: '6+ chars, 1+ capital, 1+ digit, no spaces',
-                  helperMaxLines: 2,
-                ),
-                obscureText: true,
-                validator: (value) =>
-                    value == null || value.isEmpty || !isValid(value)
-                    ? 'Password must be 6+ chars with 1+ capital letter, 1+ digit, no spaces'
-                    : null,
-              ),
-              SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                value: _selectedUserType,
-                decoration: InputDecoration(labelText: 'User Type'),
-                items: ['Admin', 'Client'].map((String type) {
-                  return DropdownMenuItem<String>(
-                    value: type,
-                    child: Text(type),
-                  );
-                }).toList(),
-                onChanged: (String? newValue) {
-                  setState(() {
-                    _selectedUserType = newValue;
-                  });
-                },
-                validator: (value) =>
-                    value == null ? 'Select a user type' : null,
-              ),
-              SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _submitForm,
-                      style: ElevatedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      child: _isLoading
-                          ? SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : Text('Save User', style: TextStyle(fontSize: 16)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+        child: Column(
+          children: [
+            TextFormField(
+              controller: _passController,
+              decoration: InputDecoration(labelText: 'required code'),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter the required code';
+                }
+                return null;
+              },
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => compareToCorrect(_passController.text),
+              child: Text('Login'),
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _passController.dispose();
+    super.dispose();
   }
 }
