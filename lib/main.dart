@@ -1,56 +1,60 @@
-///main.dart
+//login.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'login.dart' as login;
+import 'addUser.dart' as mainpage;
+import 'push.dart' as pushPage;
+import 'adminMenu.dart' as adminMenuPage;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  runApp(MyApp());
-}
-
-class Ids {
-  final String device;
-
-  Ids({required this.device});
-
-  factory Ids.fromJson(Map<dynamic, dynamic> json) {
-    return Ids(device: json['device'] ?? '');
-  }
-}
-
-class MyApp extends StatelessWidget {
+class UserForm extends StatefulWidget {
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'My App',
-      home: LoginScreen(), // Separate the login logic into its own widget
+  _UserFormState createState() => _UserFormState();
+}
+
+class User {
+  final String active;
+  final String email;
+  final String fname;
+  final String lname;
+  final String password;
+  final String position;
+
+  User({
+    required this.active,
+    required this.fname,
+    required this.lname,
+    required this.email,
+    required this.password,
+    required this.position,
+  });
+
+  factory User.fromJson(Map<dynamic, dynamic> json) {
+    return User(
+      active: json['active'] ?? '',
+      fname: json['fname'] ?? '',
+      lname: json['lname'] ?? '',
+      email: json['email'] ?? '',
+      password: json['password'] ?? '',
+      position: json['position'] ?? '',
     );
   }
 }
 
-class LoginScreen extends StatefulWidget {
-  @override
-  _LoginScreenState createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> {
-  final _passController = TextEditingController();
+class _UserFormState extends State<UserForm> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
-
-  String correctCode = "";
-  bool isLoading = true;
-  bool isLoggedIn = false;
 
   @override
   void initState() {
     super.initState();
-    checkDeviceLogin();
-    fillCorrectCode();
+    checkDeviceAndAutoFill();
   }
 
   Future<String> getDeviceId() async {
@@ -68,139 +72,205 @@ class _LoginScreenState extends State<LoginScreen> {
     return 'unknown';
   }
 
-  Future<void> checkDeviceLogin() async {
+  Future<void> checkDeviceAndAutoFill() async {
     try {
-      String id = await getDeviceId();
+      String deviceId = await getDeviceId();
       DatabaseReference ref = FirebaseDatabase.instance.ref("ids");
 
       final snapshot = await ref.get();
 
       if (snapshot.exists) {
-        Map<dynamic, dynamic> pushed = snapshot.value as Map<dynamic, dynamic>;
+        Map<dynamic, dynamic> ids = snapshot.value as Map<dynamic, dynamic>;
 
         bool deviceFound = false;
-        pushed.forEach((key, value) {
-          final user = Ids.fromJson(value);
-          if (user.device == id) {
+        ids.forEach((key, value) {
+          if (value['device'] == deviceId) {
             deviceFound = true;
+            // Auto-fill the email and password fields
+            setState(() {
+              _emailController.text = value['email'] ?? '';
+              _passwordController.text = value['password'] ?? '';
+            });
           }
         });
 
-        if (mounted) {
-          setState(() {
-            isLoggedIn = deviceFound;
-            isLoading = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-          });
+        if (!deviceFound) {
+          print('Device not found in database');
         }
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
+      print('Error checking device ID: $e');
     }
   }
 
-  Future<void> fillCorrectCode() async {
+  Future<void> saveInIds() async {
     try {
-      DatabaseReference ref = FirebaseDatabase.instance.ref("Passcode/code");
+      String deviceId = await getDeviceId();
+      DatabaseReference ref = FirebaseDatabase.instance.ref("ids");
+
+      final snapshot = await ref.get();
+      bool deviceExists = false;
+      String? existingKey;
+
+      if (snapshot.exists) {
+        Map<dynamic, dynamic> ids = snapshot.value as Map<dynamic, dynamic>;
+
+        // Check if device already exists and get its key
+        ids.forEach((key, value) {
+          if (value['device'] == deviceId) {
+            deviceExists = true;
+            existingKey = key;
+
+            // Check if email is different, then update
+            if (value['email'] != _emailController.text) {
+              ref.child(key).set({
+                'device': deviceId,
+                'email': _emailController.text,
+                'password': _passwordController.text,
+              });
+              print('Device credentials updated successfully');
+            }
+          }
+        });
+      }
+
+      // Only save if device doesn't exist
+      if (!deviceExists) {
+        await ref.push().set({
+          'device': deviceId,
+          'email': _emailController.text,
+          'password': _passwordController.text,
+        });
+        print('Device ID saved successfully');
+      }
+    } catch (e) {
+      print('Error saving device ID: $e');
+    }
+  }
+
+  Future<void> loginUser() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      DatabaseReference ref = FirebaseDatabase.instance.ref("users");
+
       final snapshot = await ref.get();
 
       if (snapshot.exists) {
-        setState(() {
-          correctCode = snapshot.value.toString();
+        bool found = false;
+        Map<dynamic, dynamic> users = snapshot.value as Map<dynamic, dynamic>;
+
+        users.forEach((key, value) {
+          final user = User.fromJson(value);
+
+          if (user.email == _emailController.text.trim() &&
+              user.password == _passwordController.text.trim()) {
+            found = true;
+
+            if (user.active == '1') {
+              // Save device ID after successful login
+              saveInIds();
+
+              if (user.position == "Client") {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        pushPage.UserForm(userInfo: user.email),
+                  ),
+                );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Login Client successful!')),
+                );
+              } else if (user.position == "Admin") {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => adminMenuPage.Menu()),
+                );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Login Admin successful!')),
+                );
+              }
+              // _passwordController.text = " ";
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('This user has been inactivated!')),
+              );
+            }
+          }
         });
+
+        if (!found) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Invalid email or password'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No users found in database'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
-      print('Error fetching correct code: $e');
-    }
-  }
-
-  void goToLogin() {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => login.UserForm()),
-    );
-  }
-
-  Future<void> compareToCorrect(String s) async {
-    if (s == correctCode) {
-      // Save the device ID to Firebase
-
-      /*save id to firebase
-      try {
-        String id = await getDeviceId();
-        DatabaseReference ref = FirebaseDatabase.instance.ref("ids");
-
-        // Push a new entry with the device ID
-        await ref.push().set({'device': id});
-      } catch (e) {
-        print('Error saving device ID: $e');
-      }*/
-
-      goToLogin();
-    } else {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text('Error'),
-          content: Text('Incorrect code'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('OK'),
-            ),
-          ],
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Database error. Please try again.'),
+          backgroundColor: Colors.red,
         ),
       );
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // If still loading, show loading indicator
-    if (isLoading) {
-      return Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    // If device is already logged in, go directly to UserForm
-    if (isLoggedIn) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        goToLogin();
-      });
-      return Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    // Show login form
     return Scaffold(
-      appBar: AppBar(title: Text('')),
+      appBar: AppBar(title: Text('Login')),
       body: Padding(
         padding: EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            TextFormField(
-              controller: _passController,
-              decoration: InputDecoration(labelText: 'required code'),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter the required code';
-                }
-                return null;
-              },
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () => compareToCorrect(_passController.text),
-              child: Text('Login'),
-            ),
-          ],
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _emailController,
+                decoration: InputDecoration(labelText: 'Username'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your Username';
+                  }
+                  return null;
+                },
+              ),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'Password'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your password';
+                  }
+                  return null;
+                },
+              ),
+              SizedBox(height: 16),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _isLoading ? null : loginUser,
+                child: _isLoading
+                    ? CircularProgressIndicator(color: Colors.white)
+                    : Text('Login'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -208,7 +278,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _passController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 }
