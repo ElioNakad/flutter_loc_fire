@@ -1,3 +1,4 @@
+//login.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -6,6 +7,8 @@ import 'push.dart' as pushPage;
 import 'adminMenu.dart' as adminMenuPage;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 class UserForm extends StatefulWidget {
   @override
@@ -46,7 +49,6 @@ class _UserFormState extends State<UserForm> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
-  bool _obscurePassword = true;
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
 
   @override
@@ -57,17 +59,20 @@ class _UserFormState extends State<UserForm> {
 
   Future<String> getDeviceId() async {
     try {
-      if (Platform.isAndroid) {
-        AndroidDeviceInfo androidInfo = await _deviceInfo.androidInfo;
-        return androidInfo.id;
-      } else if (Platform.isIOS) {
-        IosDeviceInfo iosInfo = await _deviceInfo.iosInfo;
-        return iosInfo.identifierForVendor ?? 'unknown';
+      final prefs = await SharedPreferences.getInstance();
+      String? deviceId = prefs.getString('unique_device_id');
+
+      if (deviceId == null) {
+        deviceId = const Uuid().v4();
+        await prefs.setString('unique_device_id', deviceId);
       }
+
+      return deviceId;
     } catch (e) {
-      print('Error getting device ID: $e');
+      print('Error with device ID: $e');
+      // Fallback: generate temporary ID (won't persist, but app won't crash)
+      return 'temp_${DateTime.now().millisecondsSinceEpoch}';
     }
-    return 'unknown';
   }
 
   Future<void> checkDeviceAndAutoFill() async {
@@ -84,6 +89,7 @@ class _UserFormState extends State<UserForm> {
         ids.forEach((key, value) {
           if (value['device'] == deviceId) {
             deviceFound = true;
+            // Auto-fill the email and password fields
             setState(() {
               _emailController.text = value['email'] ?? '';
               _passwordController.text = value['password'] ?? '';
@@ -112,11 +118,13 @@ class _UserFormState extends State<UserForm> {
       if (snapshot.exists) {
         Map<dynamic, dynamic> ids = snapshot.value as Map<dynamic, dynamic>;
 
+        // Check if device already exists and get its key
         ids.forEach((key, value) {
           if (value['device'] == deviceId) {
             deviceExists = true;
             existingKey = key;
 
+            // Check if email is different, then update
             if (value['email'] != _emailController.text) {
               ref.child(key).set({
                 'device': deviceId,
@@ -129,6 +137,7 @@ class _UserFormState extends State<UserForm> {
         });
       }
 
+      // Only save if device doesn't exist
       if (!deviceExists) {
         await ref.push().set({
           'device': deviceId,
@@ -164,6 +173,7 @@ class _UserFormState extends State<UserForm> {
             found = true;
 
             if (user.active == '1') {
+              // Save device ID after successful login
               saveInIds();
 
               if (user.position == "Client") {
@@ -175,11 +185,7 @@ class _UserFormState extends State<UserForm> {
                   ),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Login Client successful!'),
-                    backgroundColor: Colors.green,
-                    behavior: SnackBarBehavior.floating,
-                  ),
+                  SnackBar(content: Text('Login Client successful!')),
                 );
               } else if (user.position == "Admin") {
                 Navigator.push(
@@ -187,20 +193,13 @@ class _UserFormState extends State<UserForm> {
                   MaterialPageRoute(builder: (context) => adminMenuPage.Menu()),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Login Admin successful!'),
-                    backgroundColor: Colors.green,
-                    behavior: SnackBarBehavior.floating,
-                  ),
+                  SnackBar(content: Text('Login Admin successful!')),
                 );
               }
+              // _passwordController.text = " ";
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('This user has been inactivated!'),
-                  backgroundColor: Colors.orange,
-                  behavior: SnackBarBehavior.floating,
-                ),
+                SnackBar(content: Text('This user has been inactivated!')),
               );
             }
           }
@@ -211,7 +210,6 @@ class _UserFormState extends State<UserForm> {
             SnackBar(
               content: Text('Invalid email or password'),
               backgroundColor: Colors.red,
-              behavior: SnackBarBehavior.floating,
             ),
           );
         }
@@ -220,7 +218,6 @@ class _UserFormState extends State<UserForm> {
           SnackBar(
             content: Text('No users found in database'),
             backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -229,7 +226,6 @@ class _UserFormState extends State<UserForm> {
         SnackBar(
           content: Text('Database error. Please try again.'),
           backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
         ),
       );
     } finally {
@@ -240,218 +236,43 @@ class _UserFormState extends State<UserForm> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24.0),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Logo/Icon Section
-                    Container(
-                      padding: EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Color(0xFFFF6B5A).withOpacity(0.2),
-                            blurRadius: 20,
-                            offset: Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.access_time_rounded,
-                        size: 80,
-                        color: Color(0xFFFF6B5A),
-                      ),
-                    ),
-                    SizedBox(height: 32),
-
-                    // Title
-                    Text(
-                      'ONLINE PUNCHING',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF003D5C),
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    Text(
-                      'MACHINE',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF003D5C),
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Welcome back',
-                      style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                    ),
-                    SizedBox(height: 48),
-
-                    // Username Field
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: TextFormField(
-                        controller: _emailController,
-                        decoration: InputDecoration(
-                          labelText: 'Username',
-                          labelStyle: TextStyle(color: Colors.grey[600]),
-                          prefixIcon: Icon(
-                            Icons.person_outline,
-                            color: Color(0xFF003D5C),
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 16,
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter your Username';
-                          }
-                          return null;
-                        },
-                      ),
-                    ),
-                    SizedBox(height: 16),
-
-                    // Password Field
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: TextFormField(
-                        controller: _passwordController,
-                        obscureText: _obscurePassword,
-                        decoration: InputDecoration(
-                          labelText: 'Password',
-                          labelStyle: TextStyle(color: Colors.grey[600]),
-                          prefixIcon: Icon(
-                            Icons.lock_outline,
-                            color: Color(0xFF003D5C),
-                          ),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
-                              color: Colors.grey[600],
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _obscurePassword = !_obscurePassword;
-                              });
-                            },
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 16,
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Please enter your password';
-                          }
-                          return null;
-                        },
-                      ),
-                    ),
-                    SizedBox(height: 32),
-
-                    // Login Button
-                    Container(
-                      width: double.infinity,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          colors: [Color(0xFFFF6B5A), Color(0xFFFF8A7A)],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Color(0xFFFF6B5A).withOpacity(0.3),
-                            blurRadius: 12,
-                            offset: Offset(0, 6),
-                          ),
-                        ],
-                      ),
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : loginUser,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: _isLoading
-                            ? SizedBox(
-                                height: 24,
-                                width: 24,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2.5,
-                                ),
-                              )
-                            : Text(
-                                'Login',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                      ),
-                    ),
-                    SizedBox(height: 24),
-                  ],
-                ),
+      appBar: AppBar(title: Text('Login')),
+      body: Padding(
+        padding: EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _emailController,
+                decoration: InputDecoration(labelText: 'Username'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your Username';
+                  }
+                  return null;
+                },
               ),
-            ),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'Password'),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter your password';
+                  }
+                  return null;
+                },
+              ),
+              SizedBox(height: 16),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _isLoading ? null : loginUser,
+                child: _isLoading
+                    ? CircularProgressIndicator(color: Colors.white)
+                    : Text('Login'),
+              ),
+            ],
           ),
         ),
       ),
